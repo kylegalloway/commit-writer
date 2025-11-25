@@ -45,11 +45,6 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - cmd/controller
-          - cmd/webhook
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -60,14 +55,14 @@ jobs:
           go-version: '1.24'
           cache: true
 
-      - name: Build ${{ matrix.target }}
-        run: go build -v -o bin/$(basename ${{ matrix.target }}) ./${{ matrix.target }}
+      - name: Build main.go
+        run: go build -v -o commit-writer ./main.go
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: $(basename ${{ matrix.target }})
-          path: bin/$(basename ${{ matrix.target }})
+          name: commit-writer
+          path: commit-writer
 
   security:
     name: Security Scan
