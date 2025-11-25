@@ -207,7 +207,7 @@ func main() {
 	summaryPrompt := fmt.Sprintf(`Summarize the following git diff with strict factual accuracy.
 Produce TWO sections:
 1. A short commit title (max 60 chars)
-2. A 2-4 line commit body describing the key changes.
+2. A 3-40 line commit body describing the key changes.
 
 Rules:
 - Title should be imperative tense.
@@ -254,7 +254,7 @@ Diff:
 - Apply this tone: %s
 - Make it wild/funny/chaotic while readable.
 - Maintain title + body structure.
-- 1 title line, 2-4 body lines.
+- 1 title line, 2-40 body lines.
 
 Original commit:
 %s
