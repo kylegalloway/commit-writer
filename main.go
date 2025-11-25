@@ -160,7 +160,7 @@ func main() {
 	)
 
 	flag.StringVar(&ollamaURL, "ollama", os.Getenv("OLLAMA_URL"), "Ollama URL")
-	flag.StringVar(&summarizerModel, "summ-model", "phi3:mini", "Summarizer model")
+	flag.StringVar(&summarizerModel, "summ-model", "gemma3:4B", "Summarizer model")
 	flag.StringVar(&styleModel, "style-model", "mistral:7b", "Styling model")
 	flag.StringVar(&tone, "tone", "chaotic, wild, funny", "Tone for stylistic rewrite")
 	flag.StringVar(&hookFile, "hook", "", "Path for git hook commit message file")

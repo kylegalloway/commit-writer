@@ -3,7 +3,7 @@
 A standalone golang program that
 
 * Reads a staged git diff
-* Sends it to a "factual summarizer model" (default: `phi3:mini`)
+* Sends it to a "factual summarizer model" (default: `gemma3:4B`)
 * Sends a summary + tone instruction to a "styling model" (default: `mistral:7b`) to rewrite the summary in the given tone
 * Prints the final commit message to stdout and optionally writes it to a commit message file (for git hook usage)
 
@@ -46,7 +46,7 @@ chmod +x .git/hooks/commit-writer
 ## Quick flags & notes
 
 - `--ollama` : Ollama API URL (or set `OLLAMA_URL` env var). Default: `http://localhost:11434/api/generate`
-- `--summ-model` : Summarizer model (default `phi3:mini`)
+- `--summ-model` : Summarizer model (default `gemma3:4B`)
 - `--style-model` : Styling model (default `mistral:7b`)
 - `--tone` : Tone description passed to the stylistic model
 - `--hook` : Path to commit message file to write/append the suggestion
