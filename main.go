@@ -179,6 +179,8 @@ func main() {
 		forceWrite      bool
 		debug           bool
 		noLabels        bool
+		saveSummary     string
+		loadSummary     string
 	)
 
 	flag.StringVar(&ollamaURL, "ollama", os.Getenv("OLLAMA_URL"), "Ollama URL")
@@ -189,6 +191,8 @@ func main() {
 	flag.BoolVar(&forceWrite, "force", false, "Overwrite existing commit message in hook file")
 	flag.BoolVar(&debug, "debug", false, "Enable debug logging")
 	flag.BoolVar(&noLabels, "no-labels", false, "Remove Title:/Body: labels from output")
+	flag.StringVar(&saveSummary, "save-summary", "", "Save factual summary to file (for review or reuse)")
+	flag.StringVar(&loadSummary, "load-summary", "", "Load summary from file and skip first LLM")
 	flag.Parse()
 
 	if ollamaURL == "" {
@@ -197,8 +201,8 @@ func main() {
 
 	if debug {
 		log.SetFlags(log.LstdFlags | log.Lshortfile)
-		log.Printf("debug: ollamaURL=%s summarizerModel=%s styleModel=%s tone=%s hookFile=%s force=%v noLabels=%v",
-			ollamaURL, summarizerModel, styleModel, tone, hookFile, forceWrite, noLabels)
+		log.Printf("debug: ollamaURL=%s summarizerModel=%s styleModel=%s tone=%s hookFile=%s force=%v noLabels=%v saveSummary=%s loadSummary=%s",
+			ollamaURL, summarizerModel, styleModel, tone, hookFile, forceWrite, noLabels, saveSummary, loadSummary)
 	}
 
 	// helper to print progress status to stderr (keeps stdout reserved for the final message)
@@ -206,28 +210,45 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[status] "+format+"\n", args...)
 	}
 
-	statusf("Checking Ollama availability at %s", ollamaURL)
-	if err := checkOllama(ollamaURL); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		if debug {
-			log.Printf("checkOllama error: %v", err)
-		}
-		os.Exit(1)
-	}
-	statusf("Ollama reachable")
+	var sum string
 
-	statusf("Gathering git diff (staged or unstaged)")
-	diff, err := getStagedDiff()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading git diff: %v\n", err)
-		if debug {
-			log.Printf("getStagedDiff error: %v", err)
+	// If loading summary from file, skip the first LLM
+	if loadSummary != "" {
+		statusf("Loading summary from %s", loadSummary)
+		data, err := os.ReadFile(loadSummary)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading summary file: %v\n", err)
+			if debug {
+				log.Printf("readfile error: %v", err)
+			}
+			os.Exit(2)
 		}
-		os.Exit(2)
-	}
-	statusf("Diff collected (%d bytes)", len(diff))
+		sum = string(data)
+		statusf("Summary loaded (%d bytes)", len(sum))
+	} else {
+		// Normal flow: check Ollama and generate summary
+		statusf("Checking Ollama availability at %s", ollamaURL)
+		if err := checkOllama(ollamaURL); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			if debug {
+				log.Printf("checkOllama error: %v", err)
+			}
+			os.Exit(1)
+		}
+		statusf("Ollama reachable")
 
-	summaryPrompt := fmt.Sprintf(`Summarize the following git diff with strict factual accuracy.
+		statusf("Gathering git diff (staged or unstaged)")
+		diff, err := getStagedDiff()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading git diff: %v\n", err)
+			if debug {
+				log.Printf("getStagedDiff error: %v", err)
+			}
+			os.Exit(2)
+		}
+		statusf("Diff collected (%d bytes)", len(diff))
+
+		summaryPrompt := fmt.Sprintf(`Summarize the following git diff with strict factual accuracy.
 Produce TWO sections:
 1. A short commit title (max 60 chars)
 2. A 3-40 line commit body describing the key changes.
@@ -242,34 +263,47 @@ Diff:
 %s
 `, diff)
 
-	summaryPrompt = summaryPrompt + "\n\nOUTPUT FORMAT:\nTITLE (one line)\nBLANK LINE\nBODY (2-4 lines)\n"
+		summaryPrompt = summaryPrompt + "\n\nOUTPUT FORMAT:\nTITLE (one line)\nBLANK LINE\nBODY (2-4 lines)\n"
 
-	statusf("Calling summarizer model '%s'", summarizerModel)
-	// Try the summarizer and validate the output; retry once with a stricter
-	// prompt if the result doesn't match the expected "title + body" format.
-	var sum string
-	var lastErr error
-	for attempt := 1; attempt <= 2; attempt++ {
-		sum, lastErr = callOllama(ollamaURL, OllamaReq{
-			Model:  summarizerModel,
-			Prompt: summaryPrompt,
-			Stream: false,
-			Options: map[string]interface{}{
-				"temperature": 0.0,
-			},
-		})
-		if lastErr != nil {
-			if debug {
-				log.Printf("summarizer call error (attempt %d): %v", attempt, lastErr)
+		statusf("Calling summarizer model '%s'", summarizerModel)
+		// Try the summarizer and validate the output; retry once with a stricter
+		// prompt if the result doesn't match the expected "title + body" format.
+		var lastErr error
+		for attempt := 1; attempt <= 2; attempt++ {
+			sum, lastErr = callOllama(ollamaURL, OllamaReq{
+				Model:  summarizerModel,
+				Prompt: summaryPrompt,
+				Stream: false,
+				Options: map[string]interface{}{
+					"temperature": 0.0,
+				},
+			})
+			if lastErr != nil {
+				if debug {
+					log.Printf("summarizer call error (attempt %d): %v", attempt, lastErr)
+				}
+				continue
 			}
-			continue
+
+			statusf("Summary received (attempt %d)", attempt)
+		}
+		if lastErr != nil {
+			fmt.Fprintf(os.Stderr, "Summarizer error: %v\n", lastErr)
+			os.Exit(3)
 		}
 
-		statusf("Summary received (attempt %d)", attempt)
-	}
-	if lastErr != nil {
-		fmt.Fprintf(os.Stderr, "Summarizer error: %v\n", lastErr)
-		os.Exit(3)
+		// Save summary if requested
+		if saveSummary != "" {
+			statusf("Saving summary to %s", saveSummary)
+			if err := os.WriteFile(saveSummary, []byte(sum), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to save summary: %v\n", err)
+				if debug {
+					log.Printf("save summary error: %v", err)
+				}
+			} else {
+				statusf("Summary saved successfully")
+			}
+		}
 	}
 
 	stylePrompt := fmt.Sprintf(`Rewrite the following commit (title + body) but:
