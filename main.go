@@ -148,6 +148,27 @@ func getStagedDiff() (string, error) {
 	return string(out), nil
 }
 
+// stripLabels removes "Title:" and "Body:" prefixes from commit message lines
+func stripLabels(s string) string {
+	lines := strings.Split(s, "\n")
+	var result []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Remove "Title:" prefix (case-insensitive)
+		if strings.HasPrefix(strings.ToLower(trimmed), "title:") {
+			result = append(result, strings.TrimSpace(trimmed[6:]))
+			continue
+		}
+		// Remove "Body:" prefix (case-insensitive)
+		if strings.HasPrefix(strings.ToLower(trimmed), "body:") {
+			result = append(result, strings.TrimSpace(trimmed[5:]))
+			continue
+		}
+		result = append(result, line)
+	}
+	return strings.Join(result, "\n")
+}
+
 func main() {
 	var (
 		ollamaURL       string
@@ -157,6 +178,7 @@ func main() {
 		hookFile        string
 		forceWrite      bool
 		debug           bool
+		noLabels        bool
 	)
 
 	flag.StringVar(&ollamaURL, "ollama", os.Getenv("OLLAMA_URL"), "Ollama URL")
@@ -166,6 +188,7 @@ func main() {
 	flag.StringVar(&hookFile, "hook", "", "Path for git hook commit message file")
 	flag.BoolVar(&forceWrite, "force", false, "Overwrite existing commit message in hook file")
 	flag.BoolVar(&debug, "debug", false, "Enable debug logging")
+	flag.BoolVar(&noLabels, "no-labels", false, "Remove Title:/Body: labels from output")
 	flag.Parse()
 
 	if ollamaURL == "" {
@@ -174,8 +197,8 @@ func main() {
 
 	if debug {
 		log.SetFlags(log.LstdFlags | log.Lshortfile)
-		log.Printf("debug: ollamaURL=%s summarizerModel=%s styleModel=%s tone=%s hookFile=%s force=%v",
-			ollamaURL, summarizerModel, styleModel, tone, hookFile, forceWrite)
+		log.Printf("debug: ollamaURL=%s summarizerModel=%s styleModel=%s tone=%s hookFile=%s force=%v noLabels=%v",
+			ollamaURL, summarizerModel, styleModel, tone, hookFile, forceWrite, noLabels)
 	}
 
 	// helper to print progress status to stderr (keeps stdout reserved for the final message)
@@ -279,6 +302,9 @@ Original commit:
 	statusf("Final message generated")
 
 	finalMsg = strings.TrimSpace(finalMsg)
+	if noLabels {
+		finalMsg = stripLabels(finalMsg)
+	}
 	fmt.Println(finalMsg)
 
 	if hookFile != "" {

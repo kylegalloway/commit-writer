@@ -20,6 +20,9 @@ go build -o commit-writer main.go
 ```bash
 git add -A
 ./commit-writer --tone "increasingly insane Victorian author"
+
+# For easy copy/paste without labels
+./commit-writer --tone "chaotic, wild, funny" --no-labels
 ```
 
 ### Git Hook
@@ -52,6 +55,7 @@ chmod +x .git/hooks/commit-writer
 - `--hook` : Path to commit message file to write/append the suggestion
 - `--force` : Overwrite the `--hook` file instead of appending
 - `--debug` : Enable debug logging (prints additional info to stderr)
+- `--no-labels` : Remove "Title:" and "Body:" labels from output for easier copy/paste
 
 Build with modules enabled (there is a minimal `go.mod` included). Run
 `go vet` and `golangci-lint run` during development to catch issues.
