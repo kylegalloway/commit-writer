@@ -34,12 +34,12 @@ type OllamaResp struct {
 	Done      bool   `json:"done"`
 }
 
-func callOllama(url string, req OllamaReq) (string, error) {
+func callOllama(url string, req OllamaReq, timeout time.Duration) (string, error) {
 	b, err := json.Marshal(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: timeout}
 
 	r, err := http.NewRequest("POST", url, bytes.NewReader(b))
 	if err != nil {
@@ -78,6 +78,19 @@ func callOllama(url string, req OllamaReq) (string, error) {
 	result = cleanModelOutput(result)
 
 	return strings.TrimSpace(result), nil
+}
+
+// generateCurlCommand creates a curl command that replicates the Ollama API request
+func generateCurlCommand(url string, req OllamaReq) string {
+	b, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Sprintf("# Error marshaling request for curl: %v", err)
+	}
+
+	// Escape single quotes in the JSON for shell safety
+	jsonStr := strings.ReplaceAll(string(b), "'", "'\\''")
+
+	return fmt.Sprintf("curl -X POST '%s' \\\n  -H 'Content-Type: application/json' \\\n  -d '%s'", url, jsonStr)
 }
 
 // cleanModelOutput normalizes model text by removing code fences, unquoting
@@ -179,8 +192,10 @@ func main() {
 		forceWrite      bool
 		debug           bool
 		noLabels        bool
+		titleOnly       bool
 		saveSummary     string
 		loadSummary     string
+		timeoutSecs     int
 	)
 
 	flag.StringVar(&ollamaURL, "ollama", os.Getenv("OLLAMA_URL"), "Ollama URL")
@@ -191,18 +206,22 @@ func main() {
 	flag.BoolVar(&forceWrite, "force", false, "Overwrite existing commit message in hook file")
 	flag.BoolVar(&debug, "debug", false, "Enable debug logging")
 	flag.BoolVar(&noLabels, "no-labels", false, "Remove Title:/Body: labels from output")
+	flag.BoolVar(&titleOnly, "title-only", false, "Generate descriptive title only (no body)")
 	flag.StringVar(&saveSummary, "save-summary", "", "Save factual summary to file (for review or reuse)")
 	flag.StringVar(&loadSummary, "load-summary", "", "Load summary from file and skip first LLM")
+	flag.IntVar(&timeoutSecs, "timeout", 300, "HTTP timeout in seconds for Ollama requests")
 	flag.Parse()
 
 	if ollamaURL == "" {
 		ollamaURL = defaultOllamaURL
 	}
 
+	timeout := time.Duration(timeoutSecs) * time.Second
+
 	if debug {
 		log.SetFlags(log.LstdFlags | log.Lshortfile)
-		log.Printf("debug: ollamaURL=%s summarizerModel=%s styleModel=%s tone=%s hookFile=%s force=%v noLabels=%v saveSummary=%s loadSummary=%s",
-			ollamaURL, summarizerModel, styleModel, tone, hookFile, forceWrite, noLabels, saveSummary, loadSummary)
+		log.Printf("debug: ollamaURL=%s summarizerModel=%s styleModel=%s tone=%s hookFile=%s force=%v noLabels=%v titleOnly=%v saveSummary=%s loadSummary=%s timeout=%v",
+			ollamaURL, summarizerModel, styleModel, tone, hookFile, forceWrite, noLabels, titleOnly, saveSummary, loadSummary, timeout)
 	}
 
 	// helper to print progress status to stderr (keeps stdout reserved for the final message)
@@ -227,7 +246,7 @@ func main() {
 		statusf("Summary loaded (%d bytes)", len(sum))
 	} else {
 		// Normal flow: check Ollama and generate summary
-		statusf("Checking Ollama availability at %s", ollamaURL)
+		statusf("Checking Ollama availability at %s (timeout: %v)", ollamaURL, timeout)
 		if err := checkOllama(ollamaURL); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			if debug {
@@ -248,36 +267,63 @@ func main() {
 		}
 		statusf("Diff collected (%d bytes)", len(diff))
 
-		summaryPrompt := fmt.Sprintf(`Summarize the following git diff with strict factual accuracy.
+		summaryPrompt := ""
+		if titleOnly {
+			summaryPrompt = fmt.Sprintf(`Summarize the following git diff as a single descriptive commit title.
+
+Rules:
+- One line only (max 100 chars for descriptive version).
+- Imperative tense.
+- Be specific about what changed.
+- Do NOT invent or hallucinate.
+- Capture the key changes concisely.
+
+Diff:
+%s
+
+OUTPUT FORMAT:
+A single descriptive title line
+`, diff)
+		} else {
+			summaryPrompt = fmt.Sprintf(`Summarize the following git diff with strict factual accuracy.
 Produce TWO sections:
 1. A short commit title (max 60 chars)
-2. A 3-40 line commit body describing the key changes.
+2. A 2-40 line commit body describing the key changes.
 
 Rules:
 - Title should be imperative tense.
 - Body should describe files, functions, and intent.
 - Do NOT invent or hallucinate.
+- Do NOT include specific diff content unless necessary to illustrate a change.
 - Keep it concise.
 
 Diff:
 %s
-`, diff)
 
-		summaryPrompt = summaryPrompt + "\n\nOUTPUT FORMAT:\nTITLE (one line)\nBLANK LINE\nBODY (2-4 lines)\n"
+OUTPUT FORMAT:
+TITLE (one line)
+BLANK LINE
+BODY (2-40 lines)
+`, diff)
+		}
 
 		statusf("Calling summarizer model '%s'", summarizerModel)
 		// Try the summarizer and validate the output; retry once with a stricter
 		// prompt if the result doesn't match the expected "title + body" format.
+
+		summarizerReq := OllamaReq{
+			Model:  summarizerModel,
+			Prompt: summaryPrompt,
+			Stream: false,
+			Options: map[string]interface{}{
+				"temperature": 0.0,
+			},
+		}
+		curlCmd := generateCurlCommand(ollamaURL, summarizerReq)
+
 		var lastErr error
 		for attempt := 1; attempt <= 2; attempt++ {
-			sum, lastErr = callOllama(ollamaURL, OllamaReq{
-				Model:  summarizerModel,
-				Prompt: summaryPrompt,
-				Stream: false,
-				Options: map[string]interface{}{
-					"temperature": 0.0,
-				},
-			})
+			sum, lastErr = callOllama(ollamaURL, summarizerReq, timeout)
 			if lastErr != nil {
 				if debug {
 					log.Printf("summarizer call error (attempt %d): %v", attempt, lastErr)
@@ -289,6 +335,7 @@ Diff:
 		}
 		if lastErr != nil {
 			fmt.Fprintf(os.Stderr, "Summarizer error: %v\n", lastErr)
+			fmt.Fprintf(os.Stderr, "\nYou can test this request manually with:\n%s\n", curlCmd)
 			os.Exit(3)
 		}
 
@@ -306,28 +353,46 @@ Diff:
 		}
 	}
 
-	stylePrompt := fmt.Sprintf(`Rewrite the following commit (title + body) but:
+	stylePrompt := ""
+	if titleOnly {
+		stylePrompt = fmt.Sprintf(`Rewrite the following commit title but:
 - KEEP the factual content *exactly*.
 - Apply this tone: %s
-- Make it wild/funny/chaotic while readable.
-- Maintain title + body structure.
-- 1 title line, 2-40 body lines.
+- Make it readable and engaging
+- Keep it as a single line (max 100 chars)
+- Do not add commentary, only output the new title
+
+Original title:
+%s
+`, tone, sum)
+	} else {
+		stylePrompt = fmt.Sprintf(`Rewrite the following commit (title + body) but:
+- KEEP the factual content *exactly*.
+- Apply this tone: %s
+- Make it readable.
+- Maintain title + body structure of 1 title line, 2-40 body lines.
+- Do not add commentary, only output the content
 
 Original commit:
 %s
 `, tone, sum)
+	}
 
 	statusf("Calling style model '%s' with tone: %s", styleModel, tone)
-	finalMsg, err := callOllama(ollamaURL, OllamaReq{
+	styleReq := OllamaReq{
 		Model:  styleModel,
 		Prompt: stylePrompt,
 		Stream: false,
 		Options: map[string]interface{}{
 			"temperature": 0.9,
 		},
-	})
+	}
+	styleCurlCmd := generateCurlCommand(ollamaURL, styleReq)
+
+	finalMsg, err := callOllama(ollamaURL, styleReq, timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Styling model error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "\nYou can test this request manually with:\n%s\n", styleCurlCmd)
 		if debug {
 			log.Printf("styling call error: %v", err)
 		}
