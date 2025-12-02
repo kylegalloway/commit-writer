@@ -33,6 +33,15 @@ git add -A
 # Use different models
 ./commit-writer --summ-model "llama3:8b" --style-model "mistral:7b" --tone "pirate speak"
 
+# Timeout flag for larger models
+./commit-writer --timeout 600 --tone "professional"
+
+# Title only mode
+./commit-writer --title-only
+
+# Title only with custom tone
+./commit-writer --title-only --tone "professional, concise"
+
 # Custom Ollama URL
 ./commit-writer --ollama "http://192.168.1.100:11434/api/generate" --tone "professional"
 ```
@@ -183,6 +192,8 @@ cat review.txt  # Review the factual summary
 - `--no-labels` : Remove "Title:" and "Body:" labels from output for easier copy/paste
 - `--save-summary` : Save the factual summary to a file (useful for review or reuse with different tones)
 - `--load-summary` : Load a previously saved summary and skip the first LLM (fast tone iteration)
+- `--timeout` : Sets the timeout in seconds for the HTTP call to the Ollama API. Default: 300 (5 minutes).
+- `--title-only` : Outputs only a title instead of the normal title+body commit message. Default: false
 
 ## Practical Workflows
 
@@ -246,11 +257,26 @@ EOF
 ./commit-writer --load-summary my-commit.txt --tone "excited product launch announcement" --no-labels
 ```
 
+### Workflow 6: Interactive confirmation with `gum`
+For interactive workflows where you want to review and approve before committing (requires [gum](https://github.com/charmbracelet/gum)):
+```bash
+# Generate message, display it, confirm, then commit
+MSG="$(./commit-writer --tone "chaotic devops engineer" --no-labels --save-summary summary.txt)" && echo "$MSG" && gum confirm "Accept?" && git commit -m "$MSG"
+
+# Reuse summary with different tone
+MSG="$(./commit-writer --tone "Eeyore from Winnie the Pooh" --no-labels --load-summary summary.txt)" && echo "$MSG" && gum confirm "Accept?" && git commit -m "$MSG"
+```
+
+This workflow:
+- Generates the commit message with your chosen tone
+- Displays it for review (`echo "$MSG"`)
+- Prompts for confirmation (`gum confirm`)
+- Only commits if you approve
+- Can quickly iterate on different tones by reusing saved summaries
+
 ## Development Notes
 
 Build with modules enabled (there is a minimal `go.mod` included). Run
 `go vet` and `golangci-lint run` during development to catch issues.
 
 ```
-
-
