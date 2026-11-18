@@ -33,3 +33,5 @@ go.work.sum
 
 # Binary
 commit-writer
+# Agent skill configuration (local to this machine)
+docs/agents/
