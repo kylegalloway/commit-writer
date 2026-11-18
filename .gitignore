@@ -35,3 +35,6 @@ go.work.sum
 commit-writer
 # Agent skill configuration (local to this machine)
 docs/agents/
+
+# macOS Finder metadata
+.DS_Store
